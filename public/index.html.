@@ -1,1 +1,231 @@
 
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quiz — Bem-estar Digital</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, sans-serif;
+      color: #fff;
+      background: linear-gradient(135deg, #111827, #312e81);
+      padding: 24px 14px;
+    }
+
+    main {
+      width: 100%;
+      max-width: 620px;
+      margin: 0 auto;
+    }
+
+    .card {
+      background: #ffffff12;
+      border: 1px solid #ffffff25;
+      border-radius: 18px;
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+
+    h1 { text-align: center; font-size: 28px; }
+    p { color: #d7d8f5; line-height: 1.5; }
+
+    input, button {
+      width: 100%;
+      padding: 13px;
+      margin-top: 10px;
+      border-radius: 10px;
+      font-size: 16px;
+    }
+
+    input {
+      border: 1px solid #aaa;
+      background: #fff;
+      color: #111;
+    }
+
+    button {
+      border: 0;
+      background: #818cf8;
+      color: #111827;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    .hidden { display: none; }
+
+    .room-code {
+      text-align: center;
+      font-size: 34px;
+      font-weight: bold;
+      letter-spacing: 5px;
+    }
+
+    #status { overflow-wrap: anywhere; }
+    li { padding: 7px 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>🧠 Bem-estar Digital</h1>
+    <p style="text-align:center">
+      Um quiz multiplayer sobre saúde mental e tecnologia.
+    </p>
+
+    <section class="card" id="home">
+      <h2>🎮 Criar uma sala</h2>
+      <p>Você será o apresentador da sala.</p>
+      <button id="createBtn">Criar sala de apresentador</button>
+
+      <hr style="margin:24px 0; opacity:.2">
+
+      <h2>🚪 Entrar em uma sala</h2>
+      <input id="playerName" maxlength="24"
+        placeholder="Seu nome">
+      <input id="roomInput" maxlength="6"
+        placeholder="Código da sala">
+      <button id="joinBtn">Entrar na sala</button>
+    </section>
+
+    <section class="card hidden" id="lobby">
+      <h2>🏠 Sala de espera</h2>
+      <p>Compartilhe este código com os participantes:</p>
+      <div class="room-code" id="roomCode">------</div>
+      <p id="roleText"></p>
+
+      <h3>Jogadores conectados</h3>
+      <ul id="playersList"></ul>
+      <p id="playerCount">0 jogadores</p>
+      <p>As funções da partida serão adicionadas na próxima etapa.</p>
+    </section>
+
+    <section class="card">
+      <p id="status">Conectando ao servidor...</p>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    const $ = id => document.getElementById(id);
+    let role = "";
+    let currentCode = "";
+
+    function status(message) {
+      $("status").textContent = message;
+    }
+
+    function showLobby(code, newRole) {
+      currentCode = code;
+      role = newRole;
+
+      $("roomCode").textContent = code;
+      $("roleText").textContent =
+        role === "host" ? "Você é o apresentador." : "Você é um jogador.";
+
+      $("home").classList.add("hidden");
+      $("lobby").classList.remove("hidden");
+      status("Conectado à sala " + code);
+    }
+
+    function renderPlayers(players = []) {
+      const list = $("playersList");
+      list.replaceChildren();
+
+      players.forEach(player => {
+        const item = document.createElement("li");
+        item.textContent = player.name;
+        list.appendChild(item);
+      });
+
+      $("playerCount").textContent =
+        players.length + (players.length === 1
+          ? " jogador" : " jogadores");
+    }
+
+    socket.on("connect", () => {
+      status("Conectado ao servidor.");
+    });
+
+    socket.on("connect_error", () => {
+      status("Não foi possível conectar. Tente novamente.");
+    });
+
+    $("createBtn").addEventListener("click", () => {
+      $("createBtn").disabled = true;
+      status("Criando sala...");
+
+      socket.emit("create-room", {}, response => {
+        $("createBtn").disabled = false;
+
+        if (!response || !response.success) {
+          status("Não foi possível criar a sala.");
+          return;
+        }
+
+        showLobby(response.code, "host");
+        renderPlayers([]);
+      });
+    });
+
+    $("joinBtn").addEventListener("click", () => {
+      const name = $("playerName").value.trim();
+      const code = $("roomInput").value.trim().toUpperCase();
+
+      if (!name || !code) {
+        status("Digite seu nome e o código da sala.");
+        return;
+      }
+
+      $("joinBtn").disabled = true;
+      status("Entrando na sala...");
+
+      socket.emit("join-room", { name, code }, response => {
+        $("joinBtn").disabled = false;
+
+        if (!response || !response.success) {
+          status(response?.message || "Não foi possível entrar.");
+          return;
+        }
+
+        showLobby(response.code, "player");
+        renderPlayers(response.players);
+      });
+    });
+
+    socket.on("room-created", data => {
+      showLobby(data.code, "host");
+    });
+
+    socket.on("joined-room", data => {
+      showLobby(data.code, "player");
+      renderPlayers(data.players);
+    });
+
+    socket.on("players-updated", players => {
+      renderPlayers(players);
+    });
+
+    socket.on("room-closed", data => {
+      status(data.message || "A sala foi encerrada.");
+      $("lobby").classList.add("hidden");
+      $("home").classList.remove("hidden");
+    });
+
+    socket.on("disconnect", () => {
+      status("Conexão perdida. Recarregue a página para tentar novamente.");
+    });
+  </script>
+</body>
+</html>
+
