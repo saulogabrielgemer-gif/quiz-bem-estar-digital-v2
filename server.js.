@@ -1,1 +1,131 @@
 
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const crypto = require("crypto");
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+const PORT = process.env.PORT || 3000;
+const rooms = new Map();
+
+app.use(express.static("public"));
+
+app.get("/", (req, res) => {
+  res.sendFile(__dirname + "/public/index.html");
+});
+
+function createCode() {
+  let code;
+  do {
+    code = Math.random().toString(36).slice(2, 8).toUpperCase();
+  } while (rooms.has(code));
+  return code;
+}
+
+function publicPlayers(room) {
+  return [...room.players.values()].map((player) => ({
+    id: player.id,
+    name: player.name,
+    score: player.score
+  }));
+}
+
+io.on("connection", (socket) => {
+  socket.on("create-room", (data = {}, callback) => {
+    const code = createCode();
+
+    const room = {
+      code,
+      host: socket.id,
+      players: new Map(),
+      status: "lobby"
+    };
+
+    rooms.set(code, room);
+    socket.join(code);
+    socket.data.roomCode = code;
+    socket.data.role = "host";
+
+    if (typeof callback === "function") {
+      callback({ success: true, code });
+    }
+
+    socket.emit("room-created", {
+      code,
+      players: []
+    });
+  });
+
+  socket.on("join-room", (data = {}, callback) => {
+    const code = String(data.code || "").trim().toUpperCase();
+    const name = String(data.name || "Jogador").trim().slice(0, 24);
+    const room = rooms.get(code);
+
+    if (!room) {
+      if (typeof callback === "function") {
+        callback({ success: false, message: "Sala não encontrada." });
+      }
+      return;
+    }
+
+    if (room.status !== "lobby") {
+      if (typeof callback === "function") {
+        callback({ success: false, message: "A partida já começou." });
+      }
+      return;
+    }
+
+    room.players.set(socket.id, {
+      id: socket.id,
+      name: name || "Jogador",
+      score: 0
+    });
+
+    socket.join(code);
+    socket.data.roomCode = code;
+    socket.data.role = "player";
+
+    io.to(code).emit("players-updated", publicPlayers(room));
+
+    if (typeof callback === "function") {
+      callback({
+        success: true,
+        code,
+        players: publicPlayers(room)
+      });
+    }
+
+    socket.emit("joined-room", {
+      code,
+      players: publicPlayers(room)
+    });
+  });
+
+  socket.on("disconnect", () => {
+    const code = socket.data.roomCode;
+    if (!code) return;
+
+    const room = rooms.get(code);
+    if (!room) return;
+
+    room.players.delete(socket.id);
+
+    if (room.host === socket.id) {
+      io.to(code).emit("room-closed", {
+        message: "O apresentador saiu da sala."
+      });
+      rooms.delete(code);
+      return;
+    }
+
+    io.to(code).emit("players-updated", publicPlayers(room));
+  });
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Servidor iniciado na porta ${PORT}`);
+});
+
